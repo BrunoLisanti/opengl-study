@@ -18,18 +18,15 @@
 #include "triangle.h"
 #include "rectangle.h"
 #include "cube.h"
+#include "camera.h"
 
 constexpr float scr_w = 800;
 constexpr float scr_h = 600;
 
-glm::vec3 camera_pos =  glm::vec3(0.0f, 0.0f, 3.0f);
-glm::vec3 camera_front = glm::vec3(0.0f, 0.0f, -1.0f);
-glm::vec3 camera_up = glm::vec3(0.0f, 0.1, 0.0);
+b::camera cam(glm::vec3(0.0f, 0.0f, 3.0f));
 
-float yaw = -90.0f, pitch;
 float last_x = 400, last_y = 300;
 bool first_mouse = true;
-float fov = 90.0f;
 
 float delta_time = 0.0f;
 float last_frame = 0.0f;
@@ -46,38 +43,17 @@ void check_error(bool condition, std::string message)
 
 void process_input(GLFWwindow *window)
 {
-	glm::vec3 direction = camera_front;
-	direction.y = 0.0f;
-
-	if (glm::length((direction)) > 0.0f)
-		direction = glm::normalize(direction);
-
 	if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-	{
 		glfwSetWindowShouldClose(window, true);
-	}
 
-	const float camera_speed = 2.5f * delta_time;
 	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-	{
-		camera_pos += camera_speed * direction;
-	}
-
-	if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-	{
-		camera_pos -= camera_speed * direction;
-	}
-
-	if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-	{
-		camera_pos -= glm::normalize(glm::cross(camera_front, camera_up)) * camera_speed;
-	}
-
-	if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-	{
-		camera_pos += glm::normalize(glm::cross(camera_front, camera_up)) * camera_speed;
-	}
-	camera_pos.y = 0.0f;
+        cam.process_keyboard(camera_movement::forward, delta_time);
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+        cam.process_keyboard(camera_movement::backward, delta_time);
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+        cam.process_keyboard(camera_movement::left, delta_time);
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+        cam.process_keyboard(camera_movement::right, delta_time);
 }
 
 void clear() 
@@ -113,8 +89,11 @@ int main()
 		glViewport(0, 0, width, height); 
 	});
 
-	glfwSetCursorPosCallback(window, [](GLFWwindow* window, double xpos, double ypos)
+	glfwSetCursorPosCallback(window, [](GLFWwindow* window, double inxpos, double inypos)
 	{
+		float xpos = static_cast<float>(inxpos);
+		float ypos = static_cast<float>(inypos);
+
 		if (first_mouse)
 		{
 			last_x = xpos;
@@ -122,30 +101,17 @@ int main()
 			first_mouse = false;
 		}
 
-		float xoffset = xpos - last_x;	
-		float yoffset = last_y - ypos;	
+		float xoffset = xpos - last_x;
+		float yoffset = last_y - ypos;
+
 		last_x = xpos;
 		last_y = ypos;
-
-		const float sensitivity = 0.1f;
-		xoffset *= sensitivity;
-		yoffset *= sensitivity;
-		yaw += xoffset;
-		pitch += yoffset;
-		pitch = std::clamp(pitch, -89.0f, 89.0f);
-
-		glm::vec3 direction;
-		direction.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
-		direction.y = sin(glm::radians(pitch));
-		direction.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
-		camera_front = glm::normalize(direction);
+		cam.process_mouse_movement(xoffset, yoffset);
 	});
 
 	glfwSetScrollCallback(window, [](GLFWwindow* window, double xoffset, double yoffset){
-		fov -= (float)yoffset;
-		fov = std::clamp(fov, 1.0f, 45.0f);
+		cam.process_mouse_scroll(static_cast<float>(yoffset));
 	});
-
 
 	glEnable(GL_DEPTH_TEST);
 
@@ -176,7 +142,7 @@ int main()
 
 	while(!glfwWindowShouldClose(window))
 	{
-		float current_frame = glfwGetTime();
+		float current_frame = static_cast<float>(glfwGetTime());
 		delta_time = current_frame - last_frame;
 		last_frame = current_frame;
 		process_input(window);
@@ -187,11 +153,12 @@ int main()
 		glActiveTexture(GL_TEXTURE1);
 		tex2.bind();
 
-		glm::mat4 proj(1.0f);
+		mi_shader.use();
 
-
-		proj = glm::perspective(glm::radians(fov), scr_w/scr_h, 0.1f, 100.0f);
+		glm::mat4 proj = glm::perspective(glm::radians(cam.zoom), scr_w/scr_h, 0.1f, 100.0f);
 		mi_shader.set_mat4("projection", proj);
+		glm::mat4 view = cam.get_view_matrix();
+		mi_shader.set_mat4("view", view);
 
 		for (unsigned i = 0; i < 10; i++)
 		{
@@ -200,17 +167,6 @@ int main()
 			float angle = 20.0f * i;
 			model = glm::rotate(model, glm::radians(angle), glm::vec3(1.0, 0.3, 0.5));
 			mi_shader.set_mat4("model", model);
-
-
-			glm::mat4 view(1.0f);
-
-			view = glm::lookAt(
-				camera_pos, //Desde donde
-				camera_pos + camera_front, // Hacia donde
-				camera_up //Vector hacia arriba
-			);
-
-			mi_shader.set_mat4("view", view);
 
 			cubo.draw();
 		}
